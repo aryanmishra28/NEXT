@@ -8,6 +8,10 @@ const cookieParser = require('cookie-parser');
 const authRoutes = require('./routes/auth');
 const resumeRoutes = require('./routes/resume');
 const hackathonRoutes = require('./routes/hackathon');
+const aiChatRoutes = require('./routes/aiChat');
+const jobsRoutes = require('./routes/job');
+const applicationRoutes = require('./routes/application');
+
 
 const app = express();
 
@@ -23,20 +27,15 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/hackathon', hackathonRoutes);
+app.use('/api/ai', aiChatRoutes);
+app.use("/api/jobs", jobsRoutes);
+app.use("/api/applications", applicationRoutes);
+
+
 
 // Health check
 app.get('/', (req, res) => {
   res.send('Welcome to the NEXT STEP backend!');
 });
-
-// // DB connect (use consistent env name)
-// const MONGODB_URI = process.env.MONGODB_URI;
-// if (!MONGODB_URI) {
-//   console.error('MONGODB_URI is not defined in .env');
-//   process.exit(1);
-// }
-// mongoose.connect(MONGODB_URI)
-//   .then(() => console.log('MongoDB connected successfully'))
-//   .catch(err => console.error('MongoDB connection error:', err));
 
 module.exports = app; // Export app for server.js to use

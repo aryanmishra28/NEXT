@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { loginUser, registerUser } from '../utils/api'; // Import the new functions
+import { useAuth } from "../components/AuthContext";
+
 
 const LoginForm = () => {
   const [name, setName] = useState('');

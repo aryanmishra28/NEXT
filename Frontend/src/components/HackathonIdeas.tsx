@@ -17,9 +17,18 @@ import {
 } from 'lucide-react';
 import { fetchHackathons, type Hackathon } from '../utils/api';
 
+type GeneratedIdea = {
+  title: string;
+  description: string;
+  technologies?: string[];
+  difficulty?: string;
+  category?: string;
+};
+
+
 export function HackathonIdeas() {
   const [selectedSkill, setSelectedSkill] = useState('');
-  const [generatedIdeas, setGeneratedIdeas] = useState([]);
+  const [generatedIdeas, setGeneratedIdeas] = useState<GeneratedIdea[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [featuredHackathons, setFeaturedHackathons] = useState<Hackathon[]>([]);
   const [isLoadingHackathons, setIsLoadingHackathons] = useState(true);
@@ -84,22 +93,92 @@ export function HackathonIdeas() {
   ];
 
   // replace generateIdeas in Frontend/src/components/HackathonIdeas.tsx
-const generateIdeas = async () => {
-  if (!selectedSkill) return;
-  setIsGenerating(true);
-  try {
-    const res = await fetch('http://localhost:5000/api/hackathon/generate-ideas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ interest: selectedSkill, category: 'Innovation', skillLevel: 'Intermediate' }),
-    });
-    const data = await res.json();
-    // data.ideas is a text block from the model — render as text or parse into cards
-    setGeneratedIdeas([{ title: 'Ideas', description: data.ideas, difficulty: 'Intermediate', tech: [], category: 'AI' }]);
-  } finally {
-    setIsGenerating(false);
+  const generateIdeas = async () => {
+    if (!selectedSkill) return;
+    setIsGenerating(true);
+    try {
+      const res = await fetch('http://localhost:5000/api/hackathon/generate-ideas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          interest: selectedSkill,
+          category: 'Innovation',
+          skillLevel: 'Intermediate'
+        }),
+      });
+  
+      if (!res.ok) {
+        const text = await res.text();
+        console.error('Server error:', res.status, text);
+        alert('Failed to generate ideas. Check server logs.');
+        return;
+      }
+  
+      const data = await res.json();
+  
+      // Case A: Backend returned structured array at data.ideas
+      if (Array.isArray(data.ideas)) {
+        // Normalize each idea to our GeneratedIdea shape
+        const normalized = data.ideas.map((it: any) => ({
+          title: it.title || it.name || 'Untitled Idea',
+          description: it.description || it.desc || '',
+          technologies: Array.isArray(it.technologies) ? it.technologies : (typeof it.technologies === 'string' ? it.technologies.split(',').map((s:string)=>s.trim()) : []),
+          difficulty: it.difficulty || it.level || 'Intermediate',
+          category: it.category || 'General'
+        }));
+        setGeneratedIdeas(normalized);
+        return;
+      }
+  
+      // Case B: Backend returned ideas_raw (string). Try to extract JSON substring and parse.
+      const raw = data.ideas_raw ?? data.ideas ?? JSON.stringify(data);
+      const extracted = extractJsonArray(raw);
+      if (extracted) {
+        try {
+          const parsed = JSON.parse(extracted);
+          if (Array.isArray(parsed)) {
+            const normalized = parsed.map((it: any) => ({
+              title: it.title || it.name || 'Untitled Idea',
+              description: it.description || it.desc || '',
+              technologies: Array.isArray(it.technologies) ? it.technologies : (typeof it.technologies === 'string' ? it.technologies.split(',').map((s:string)=>s.trim()) : []),
+              difficulty: it.difficulty || it.level || 'Intermediate',
+              category: it.category || 'General'
+            }));
+            setGeneratedIdeas(normalized);
+            return;
+          }
+        } catch (e) {
+          console.warn('JSON parse failed on extracted substring', e);
+        }
+      }
+  
+      // Final fallback: show raw text as a single card
+      setGeneratedIdeas([{
+        title: 'AI Output (raw)',
+        description: typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2),
+        technologies: [],
+        difficulty: 'Intermediate',
+        category: 'AI'
+      }]);
+  
+    } catch (err) {
+      console.error('Network / unexpected error:', err);
+      alert('Network error while generating ideas.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+  
+  // Helper: find first JSON array in text and return it as string (or null)
+  function extractJsonArray(text: string): string | null {
+    if (!text || typeof text !== 'string') return null;
+    const first = text.indexOf('[');
+    const last = text.lastIndexOf(']');
+    if (first === -1 || last === -1 || last <= first) return null;
+    // Return the substring that looks like a JSON array
+    return text.slice(first, last + 1);
   }
-};
+  
 
   const getDifficultyColor = (difficulty: string | undefined) => {
     if (!difficulty) return 'bg-gray-100 text-gray-800';
@@ -193,13 +272,15 @@ const generateIdeas = async () => {
                     </div>
                     <p className="text-gray-600 mb-4">{idea.description}</p>
                     <div className="space-y-2">
-                      <div className="flex flex-wrap gap-2">
-                        {idea.tech.map((tech, techIndex) => (
-                          <span key={techIndex} className="px-2 py-1 bg-gray-100 text-gray-700 rounded-lg text-xs">
-                            {tech}
-                          </span>
-                        ))}
-                      </div>
+                      {idea.technologies && idea.technologies.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {idea.technologies.map((tech, techIndex) => (
+                            <span key={techIndex} className="px-2 py-1 bg-gray-100 text-gray-700 rounded-lg text-xs">
+                              {tech}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-[#6A0DAD] font-medium">{idea.category}</span>
                         <button

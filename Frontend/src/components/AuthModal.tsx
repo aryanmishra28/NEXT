@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useAuth } from '../App';
+import { useAuth } from './AuthContext';
 import { X, Mail, Lock, User, Eye, EyeOff } from 'lucide-react';
 import { registerUser, googleSignIn } from '../utils/api';
 
 declare global {
   interface Window {
     google: any;
+    __googleSignInWarningShown?: boolean;
   }
 }
 
@@ -22,7 +23,8 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
   const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { login } = useAuth();
+  // Use auth from context once at top-level
+  const { login, refreshUser } = useAuth();
   const googleButtonRef = useRef<HTMLDivElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -44,10 +46,10 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
       // Then login
       const loginResponse = await login(email, password);
       console.log('Login successful:', loginResponse);
-      
+
       // Small delay to ensure state is updated
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       onClose();
       // Reset form
       setEmail('');
@@ -56,11 +58,9 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
       setError(null);
     } catch (error: any) {
       console.error('Auth error:', error);
-      // Provide more helpful error messages
       let errorMessage = 'An error occurred. Please try again.';
       if (error?.message) {
         errorMessage = error.message;
-        // Check if it's a network/server error
         if (error.message.includes('Network error') || error.message.includes('Could not connect')) {
           errorMessage = 'Cannot connect to server. Please make sure the backend server is running on port 5000.';
         } else if (error.message.includes('500')) {
@@ -82,37 +82,41 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
     setError(null);
   };
 
-  // Handle Google Sign-in callback
-  const handleGoogleSignIn = useCallback(async (response: any) => {
+// Handle Google Sign-in response
+  const handleGoogleSignIn = useCallback(
+  async (response: any) => {
     setIsLoading(true);
     setError(null);
 
     try {
+      if (!response?.credential) {
+        throw new Error('No Google credential received');
+      }
+
+      // Send id token to backend (googleSignIn util posts { idToken })
       const authResponse = await googleSignIn(response.credential);
-      if (authResponse.token) {
-        localStorage.setItem('token', authResponse.token);
+
+      // Check backend response before proceeding
+      if (!authResponse || !authResponse.success) {
+        const msg = authResponse?.message || 'Google sign-in failed on server';
+        throw new Error(msg);
       }
-      
-      // Update user context - we need to trigger a re-render
-      // For now, we'll reload the page to refresh auth state
-      // In a production app, you'd update the context directly
-      if (authResponse.user) {
-        // Store user in sessionStorage for persistence
-        sessionStorage.setItem('user', JSON.stringify(authResponse.user));
-        // Update auth context immediately without reload
-        const { login } = useAuth();
-        // Force update by setting user state directly (we'll reload as fallback)
-        onClose();
-        // Small delay then reload to ensure state is updated
-        setTimeout(() => window.location.reload(), 300);
-      }
+
+      // Backend should set httpOnly cookie. Refresh user state from backend.
+      await refreshUser();
+
+      // Close modal on success
+      onClose();
     } catch (error: any) {
       console.error('Google sign-in error:', error);
       setError(error?.message || 'Google sign-in failed. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  }, [onClose]);
+  },
+  [onClose, refreshUser]
+);
+
 
   // Initialize Google Sign-in button
   useEffect(() => {
@@ -131,38 +135,43 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
       if (window.google && window.google.accounts && googleButtonRef.current) {
         try {
           // Get Google Client ID from environment or use placeholder
-          const clientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || 
-                          import.meta.env.VITE_GOOGLE_CLIENT_ID || 
-                          '';
-          
+          const clientId =
+            (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
+            (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
+            '';
+
           // Only initialize if we have a valid client ID
           if (!clientId || clientId === 'YOUR_GOOGLE_CLIENT_ID' || clientId.trim() === '') {
-            console.warn('Google Client ID not configured. Google Sign-in is disabled.');
+            if (!window.__googleSignInWarningShown) {
+              console.info(
+                'Google Sign-in is not configured. To enable it, add VITE_GOOGLE_CLIENT_ID to your .env file.'
+              );
+              window.__googleSignInWarningShown = true;
+            }
             if (googleButtonRef.current) {
-              googleButtonRef.current.innerHTML = '<button type="button" disabled class="w-full flex items-center justify-center space-x-3 py-3 border border-gray-300 rounded-xl bg-gray-50 text-gray-400 cursor-not-allowed"><span className="font-medium">Google Sign-in (Not Configured)</span></button>';
+              googleButtonRef.current.innerHTML =
+                '<button type="button" disabled class="w-full flex items-center justify-center space-x-3 py-3 border border-gray-300 rounded-xl bg-gray-50 text-gray-400 cursor-not-allowed"><span className="font-medium">Google Sign-in (Not Configured)</span></button>';
             }
             return;
           }
-          
+
           window.google.accounts.id.initialize({
             client_id: clientId,
             callback: handleGoogleSignIn,
           });
 
-          window.google.accounts.id.renderButton(
-            googleButtonRef.current,
-            {
-              type: 'standard',
-              theme: 'outline',
-              size: 'large',
-              text: 'signin_with',
-              width: '100%',
-            }
-          );
+          window.google.accounts.id.renderButton(googleButtonRef.current, {
+            type: 'standard',
+            theme: 'outline',
+            size: 'large',
+            text: 'signin_with',
+            width: '100%',
+          });
         } catch (error) {
           console.error('Error initializing Google Sign-in:', error);
           if (googleButtonRef.current) {
-            googleButtonRef.current.innerHTML = '<button type="button" disabled class="w-full flex items-center justify-center space-x-3 py-3 border border-gray-300 rounded-xl bg-gray-50 text-gray-400 cursor-not-allowed"><span className="font-medium">Google Sign-in (Error)</span></button>';
+            googleButtonRef.current.innerHTML =
+              '<button type="button" disabled class="w-full flex items-center justify-center space-x-3 py-3 border border-gray-300 rounded-xl bg-gray-50 text-gray-400 cursor-not-allowed"><span className="font-medium">Google Sign-in (Error)</span></button>';
           }
         }
       } else if (retryCount < maxRetries) {
@@ -186,10 +195,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal */}
       <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
@@ -207,14 +213,9 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
             <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <span className="text-2xl font-bold">NS</span>
             </div>
-            <h2 className="text-2xl font-bold">
-              {isLogin ? 'Welcome Back!' : 'Join NEXT STEP'}
-            </h2>
+            <h2 className="text-2xl font-bold">{isLogin ? 'Welcome Back!' : 'Join NEXT STEP'}</h2>
             <p className="text-white/80">
-              {isLogin
-                ? 'Sign in to continue your career journey'
-                : 'Start your career growth journey today'
-              }
+              {isLogin ? 'Sign in to continue your career journey' : 'Start your career growth journey today'}
             </p>
           </div>
         </div>
@@ -303,8 +304,10 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   <span>{isLogin ? 'Signing In...' : 'Creating Account...'}</span>
                 </div>
+              ) : isLogin ? (
+                'Sign In'
               ) : (
-                isLogin ? 'Sign In' : 'Create Account'
+                'Create Account'
               )}
             </button>
           </form>
@@ -343,11 +346,8 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
           {/* Toggle Mode */}
           <div className="mt-6 text-center">
             <p className="text-gray-600">
-              {isLogin ? "Don't have an account?" : "Already have an account?"}{' '}
-              <button
-                onClick={toggleMode}
-                className="text-[#6A0DAD] hover:text-[#9B4DFF] font-medium transition-colors"
-              >
+              {isLogin ? "Don't have an account?" : 'Already have an account?'}{' '}
+              <button onClick={toggleMode} className="text-[#6A0DAD] hover:text-[#9B4DFF] font-medium transition-colors">
                 {isLogin ? 'Sign up' : 'Sign in'}
               </button>
             </p>

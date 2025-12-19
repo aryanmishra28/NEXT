@@ -1,34 +1,550 @@
-const fetch = require('node-fetch');
+const fetch = global.fetch || require('node-fetch');
 const Hackathon = require('../models/hackathon');
+const { GoogleGenAI } = require('@google/genai');
+const axios = require('axios');
 
-// Generate hackathon PROJECT IDEAS (using OpenAI) ✅ CORRECT USE
+// Environment toggle: set USE_GEMINI=false in .env to disable live Gemini calls (use sample ideas)
+const USE_GEMINI = String(process.env.USE_GEMINI ?? 'true').toLowerCase() !== 'false';
+
+// Helper function to estimate tokens (rough approximation: 1 token ≈ 4 characters)
+function estimateTokens(text) {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
+// sanitize string: remove surrounding backticks/markdown, line numbers like "1." etc.
+function sanitizeModelText(s) {
+  if (!s) return s;
+  // remove common prefixes like "```json" and suffixes "```"
+  s = s.replace(/```json\s*/i, '').replace(/```$/i, '');
+  // remove leading numbering like "1. {" or "1) {" etc. only if followed by whitespace
+  s = s.replace(/^\s*\d+\s*[.)]\s*/gm, '');
+  // trim
+  return s.trim();
+}
+
+// Find the first balanced JSON array in a string (returns null if none)
+function findBalancedJsonArray(text) {
+  if (!text || typeof text !== 'string') return null;
+  const start = text.indexOf('[');
+  if (start === -1) return null;
+
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '[') depth++;
+    else if (ch === ']') depth--;
+
+    // If we closed all opened arrays, return substring
+    if (depth === 0) {
+      return text.slice(start, i + 1);
+    }
+  }
+  return null; // no balanced array found
+}
+
+function safeJsonParse(str) {
+  try { return { ok: true, value: JSON.parse(str) }; }
+  catch (err) { return { ok: false, error: err }; }
+}
+
+// Try to list models; try v1 then v1beta
+async function listModels(apiKey) {
+  const bases = [
+    'https://generativelanguage.googleapis.com/v1',
+    'https://generativelanguage.googleapis.com/v1beta'
+  ];
+  for (const base of bases) {
+    try {
+      const url = `${base}/models?key=${apiKey}`;
+      const r = await axios.get(url, { validateStatus: () => true });
+      if (r.status >= 200 && r.status < 300 && Array.isArray(r.data?.models)) {
+        return { base, models: r.data.models };
+      }
+      // if 404/403/400, continue to next base
+    } catch (err) {
+      // ignore and try next base
+    }
+  }
+  return null;
+}
+
+function pickModel(models) {
+  // prefer any model that supports generateContent, else generateText
+  if (!Array.isArray(models)) return null;
+  for (const m of models) {
+    const sm = m.supportedMethods || m.supported_methods || [];
+    if (sm.includes('generateContent')) return m;
+  }
+  for (const m of models) {
+    const sm = m.supportedMethods || m.supported_methods || [];
+    if (sm.includes('generateText')) return m;
+  }
+  return models.find(m => /gemini|bison|text/i.test(m.name)) || models[0] || null;
+}
+
+// Generate sample ideas as fallback when API quota is exceeded
+function generateSampleIdeas(interest, category, skillLevel) {
+  const interestLower = (interest || '').toLowerCase();
+  const ideas = [];
+
+  // Web Development ideas
+  if (interestLower.includes('web') || interestLower.includes('frontend') || interestLower.includes('backend')) {
+    ideas.push(
+      {
+        title: 'TaskFlow - Collaborative Project Manager',
+        description: 'A real-time collaborative project management tool with drag-and-drop boards, team chat, and progress tracking.',
+        technologies: ['React', 'Node.js', 'Socket.io', 'MongoDB'],
+        difficulty: skillLevel || 'Intermediate',
+        category: category || 'Productivity'
+      },
+      {
+        title: 'CodeShare - Live Code Editor',
+        description: 'A browser-based code editor with real-time collaboration, syntax highlighting, and instant deployment.',
+        technologies: ['React', 'WebSockets', 'Docker', 'AWS'],
+        difficulty: skillLevel || 'Advanced',
+        category: category || 'Developer Tools'
+      },
+      {
+        title: 'EcoCart - Sustainable Shopping Assistant',
+        description: 'Browser extension that suggests eco-friendly alternatives while shopping online.',
+        technologies: ['JavaScript', 'Chrome Extension API', 'React', 'Firebase'],
+        difficulty: skillLevel || 'Beginner',
+        category: category || 'Sustainability'
+      }
+    );
+  }
+
+  // Mobile Apps ideas
+  if (interestLower.includes('mobile') || interestLower.includes('app') || interestLower.includes('ios') || interestLower.includes('android')) {
+    ideas.push(
+      {
+        title: 'StudySync - Study Group Organizer',
+        description: 'Mobile app to organize study groups, share notes, and track learning progress with gamification.',
+        technologies: ['React Native', 'Firebase', 'Redux', 'Expo'],
+        difficulty: skillLevel || 'Intermediate',
+        category: category || 'Education'
+      },
+      {
+        title: 'FitTrack - Personal Fitness Coach',
+        description: 'AI-powered fitness app with workout plans, meal tracking, and progress analytics.',
+        technologies: ['Flutter', 'TensorFlow Lite', 'SQLite', 'REST API'],
+        difficulty: skillLevel || 'Intermediate',
+        category: category || 'Health & Fitness'
+      }
+    );
+  }
+
+  // AI/ML ideas
+  if (interestLower.includes('ai') || interestLower.includes('machine learning') || interestLower.includes('ml')) {
+    ideas.push(
+      {
+        title: 'SmartResume - AI Resume Analyzer',
+        description: 'Analyze resumes and provide personalized feedback to improve ATS compatibility and job match score.',
+        technologies: ['Python', 'OpenAI API', 'Flask', 'NLP'],
+        difficulty: skillLevel || 'Advanced',
+        category: category || 'Career Tools'
+      },
+      {
+        title: 'PlantAI - Plant Care Assistant',
+        description: 'Identify plants from photos and provide care recommendations using computer vision.',
+        technologies: ['TensorFlow', 'React Native', 'Firebase', 'Image Recognition'],
+        difficulty: skillLevel || 'Intermediate',
+        category: category || 'Lifestyle'
+      }
+    );
+  }
+
+  // Blockchain ideas
+  if (interestLower.includes('blockchain') || interestLower.includes('crypto') || interestLower.includes('web3')) {
+    ideas.push(
+      {
+        title: 'CharityChain - Transparent Donation Platform',
+        description: 'Blockchain-based platform ensuring transparent and traceable charitable donations.',
+        technologies: ['Solidity', 'Web3.js', 'React', 'Ethereum'],
+        difficulty: skillLevel || 'Advanced',
+        category: category || 'Social Impact'
+      }
+    );
+  }
+
+  // IoT ideas
+  if (interestLower.includes('iot') || interestLower.includes('internet of things')) {
+    ideas.push(
+      {
+        title: 'SmartHome Hub - Unified IoT Controller',
+        description: 'Centralized hub to control all smart home devices with voice commands and automation.',
+        technologies: ['Arduino', 'Raspberry Pi', 'MQTT', 'React'],
+        difficulty: skillLevel || 'Intermediate',
+        category: category || 'Smart Home'
+      }
+    );
+  }
+
+  // Data Science ideas
+  if (interestLower.includes('data') || interestLower.includes('analytics')) {
+    ideas.push(
+      {
+        title: 'TrendTracker - Social Media Analytics',
+        description: 'Analyze social media trends and predict viral content using data science techniques.',
+        technologies: ['Python', 'Pandas', 'Scikit-learn', 'D3.js'],
+        difficulty: skillLevel || 'Advanced',
+        category: category || 'Analytics'
+      }
+    );
+  }
+
+  // Default ideas if no specific match
+  if (ideas.length === 0) {
+    ideas.push(
+      {
+        title: `${interest} Innovation Platform`,
+        description: `A platform to connect ${interest} enthusiasts, share ideas, and collaborate on projects.`,
+        technologies: ['React', 'Node.js', 'MongoDB', 'Express'],
+        difficulty: skillLevel || 'Intermediate',
+        category: category || 'Innovation'
+      },
+      {
+        title: `Smart${interest} Assistant`,
+        description: `An AI-powered assistant to help with ${interest} tasks and provide intelligent recommendations.`,
+        technologies: ['Python', 'React', 'OpenAI API', 'FastAPI'],
+        difficulty: skillLevel || 'Intermediate',
+        category: category || 'AI Tools'
+      },
+      {
+        title: `${interest} Learning Hub`,
+        description: `Interactive learning platform for ${interest} with courses, quizzes, and progress tracking.`,
+        technologies: ['Next.js', 'TypeScript', 'PostgreSQL', 'Stripe'],
+        difficulty: skillLevel || 'Beginner',
+        category: category || 'Education'
+      }
+    );
+  }
+
+  // Return 3-5 ideas
+  return ideas.slice(0, 5);
+}
+
+// Robust Gemini caller with retries & backoff
+async function callGeminiAPI(apiKey, prompt, context = 'genai', opts = {}) {
+  // opts: { model, maxRetries, initialDelayMs }
+  const model = opts.model || 'gemini-2.0-flash';
+  const maxRetries = Number(opts.maxRetries ?? 3);
+  let delay = Number(opts.initialDelayMs ?? 800);
+
+  if (!USE_GEMINI) {
+    const err = new Error('Gemini disabled via USE_GEMINI env');
+    err.type = 'DISABLED';
+    throw err;
+  }
+
+  if (!apiKey) {
+    const err = new Error('GEMINI_API_KEY not configured');
+    err.type = 'NO_KEY';
+    throw err;
+  }
+
+  let attempt = 0;
+
+  while (attempt < maxRetries) {
+    attempt++;
+    try {
+      console.log(`📡 [${context}] Calling Google GenAI API (attempt ${attempt})...`);
+      const genAI = new GoogleGenAI({ apiKey });
+
+      // call generateContent; the SDK returns a structured response
+      const response = await genAI.models.generateContent({
+        model,
+        contents: prompt
+      });
+
+      // Extract text - attempt common shapes
+      let text = '';
+
+      if (response && typeof response.text === 'string') {
+        text = response.text;
+      } else if (response && typeof response.text === 'function') {
+        text = response.text();
+      } else if (response?.candidates && Array.isArray(response.candidates) && response.candidates[0]) {
+        const c = response.candidates[0];
+        // older shapes: c.content.parts[0].text
+        if (c.content?.parts?.[0]?.text) text = c.content.parts[0].text;
+        else if (c.output?.[0]?.content?.[0]?.text) text = c.output[0].content[0].text;
+        else text = JSON.stringify(c).slice(0, 1000); // last resort
+      } else if (response?.output?.[0]?.content) {
+        // new-ish shape
+        const parts = response.output[0].content;
+        // join text parts if present
+        text = parts.map(p => (typeof p === 'string' ? p : p.text || '')).join('');
+      } else {
+        // fallback stringify for debugging
+        console.warn(`❗ [${context}] Unexpected GenAI response shape. Dumping small preview.`);
+        text = JSON.stringify(response).slice(0, 2000);
+      }
+
+      if (!text || text.trim().length === 0) {
+        const err = new Error('API returned empty text');
+        err.type = 'EMPTY_RESPONSE';
+        err.raw = response;
+        throw err;
+      }
+
+      console.log(`✓ [${context}] Extracted text length: ${text.length}`);
+      return text;
+    } catch (err) {
+      // err can be ApiError from SDK with status/code/message
+      const msg = String(err?.message || err);
+      const isQuota = msg.toLowerCase().includes('quota') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429');
+      const containsZeroLimit = msg.includes('limit: 0');
+
+      // If the error includes RetryInfo with seconds, extract that
+      let serverDelayMs = null;
+      try {
+        const m = msg.match(/retry.*?(\d+\.?\d*)s/i) || msg.match(/Retry-After:\s*(\d+)/i);
+        if (m) serverDelayMs = Math.ceil(Number(m[1]) * 1000);
+      } catch (e) {}
+
+      console.warn(`❌ [${context}] GenAI error on attempt ${attempt}: ${msg.substring(0, 300)}`);
+
+      // If quota=0, bail immediately (no point retrying)
+      if (containsZeroLimit) {
+        const e = new Error('Quota exceeded (limit: 0)');
+        e.type = 'QUOTA';
+        e.raw = err;
+        throw e;
+      }
+
+      // If it's a quota error or too many requests, consider retrying up to maxRetries
+      if (isQuota) {
+        if (attempt >= maxRetries) {
+          const e = new Error('Quota/rate limit error after retries');
+          e.type = 'QUOTA';
+          e.raw = err;
+          throw e;
+        }
+        const waitMs = serverDelayMs ?? delay;
+        console.log(`⏳ Waiting ${waitMs}ms before retrying...`);
+        await new Promise(r => setTimeout(r, waitMs));
+        delay *= 2;
+        continue;
+      }
+
+      // For other errors, if attempts left, retry; otherwise throw
+      if (attempt < maxRetries) {
+        console.log(`⏳ Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, delay));
+        delay *= 2;
+        continue;
+      }
+
+      // No retries left, attach type and raw
+      const e = new Error(msg);
+      e.type = 'API_ERROR';
+      e.raw = err;
+      throw e;
+    }
+  }
+
+  // If exited loop unexpectedly:
+  const e = new Error('Gemini call failed after retries');
+  e.type = 'API_ERROR';
+  throw e;
+}
+
+// Generate hackathon project ideas using Google GenAI
 const generateIdeas = async (req, res) => {
   try {
     const { interest, category, skillLevel } = req.body;
 
-    const prompt = `Generate 5 unique hackathon ideas for a project in the "${category}" category. The ideas should be related to "${interest}" and be suitable for a "${skillLevel}" skill level. For each idea, provide a short description and a list of key technologies that could be used.`;
+    if (!interest) {
+      return res.status(400).json({
+        success: false,
+        message: 'Interest field is required'
+      });
+    }
 
-    // Call OpenAI to generate project ideas (this is appropriate)
-    const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: prompt }]
-      })
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    // If no API key or USE_GEMINI disabled, use sample ideas
+    if (!apiKey || !USE_GEMINI) {
+      if (!apiKey) {
+        console.log('❌ No GEMINI_API_KEY found in environment variables, using sample ideas');
+      } else {
+        console.log('❗ USE_GEMINI is disabled in environment, using sample ideas');
+      }
+      const sampleIdeas = generateSampleIdeas(interest, category, skillLevel);
+      return res.json({
+        success: true,
+        ideas: sampleIdeas,
+        count: sampleIdeas.length,
+        source: 'sample',
+        note: !apiKey
+          ? 'AI API key not configured. Showing sample ideas. Add GEMINI_API_KEY to .env to enable AI generation.'
+          : 'USE_GEMINI=false set in env; live AI disabled.'
+      });
+    }
+
+    // Validate API key format (Google API keys typically start with AIza)
+    if (!apiKey.startsWith('AIza')) {
+      console.warn('⚠️ API key format looks unusual. Google API keys usually start with "AIza"');
+    }
+
+    console.log('✓ GEMINI_API_KEY found, length:', apiKey.length);
+
+    // Build concise prompt
+    const timestamp = Date.now();
+    const randomSeed = Math.floor(Math.random() * 1000);
+
+    const prompt = `Generate 4-5 UNIQUE hackathon ideas for ${interest}. Skill: ${skillLevel || 'Intermediate'}. Category: ${category || 'Innovation'}.
+
+Requirements:
+- Fresh, original ideas each time (ID: ${timestamp}-${randomSeed})
+- Vary technologies, problem domains, difficulty levels
+- Practical for 24-48h hackathons
+- Mix social impact, technical, creative, business applications
+
+For each idea provide:
+- Creative title
+- Brief description (problem + solution)
+- Tech stack (3-4 technologies)
+- Difficulty (Beginner/Intermediate/Advanced)
+- Category
+
+Return ONLY JSON array (no markdown):
+[
+  {"title": "...", "description": "...", "technologies": ["..."], "difficulty": "...", "category": "..."}
+]`;
+
+    // Estimate tokens for logging
+    const estimatedTokens = estimateTokens(prompt);
+    console.log('Estimated input tokens for hackathon ideas:', estimatedTokens, '(free tier limit: ~15,000)');
+    if (estimatedTokens > 1000) {
+      console.warn('Warning: Prompt may be approaching token limits');
+    }
+
+    console.log('Interest:', interest, 'Category:', category, 'Skill Level:', skillLevel);
+    console.log('Request ID:', `${timestamp}-${randomSeed}`);
+    console.log('Prompt length:', prompt.length, 'chars');
+
+    // Call Gemini with retries
+    let text;
+    try {
+text = await callGeminiAPI(apiKey, prompt, 'Hackathon Ideas', { model: 'gemini-2.5-flash', maxRetries: 3, initialDelayMs: 800 });
+    } catch (err) {
+      // Distinguish error types to pick fallback or return error
+      console.error('Error in hackathon ideas API call:', err);
+      // If it's clearly quota/rate limit or disabled/no-key, fallback to sample ideas
+      const errType = err?.type || (String(err?.message || '').toLowerCase().includes('quota') ? 'QUOTA' : 'API_ERROR');
+      if (errType === 'QUOTA' || errType === 'DISABLED' || errType === 'NO_KEY' || errType === 'RATE_LIMIT') {
+        console.log('⚠️ API call failed, using sample ideas as fallback');
+        const sampleIdeas = generateSampleIdeas(interest, category, skillLevel);
+        return res.json({
+          success: true,
+          ideas: sampleIdeas,
+          count: sampleIdeas.length,
+          source: 'sample',
+          note: errType === 'QUOTA'
+            ? 'API quota exceeded. Showing sample ideas.'
+            : errType === 'DISABLED' ? 'Gemini disabled via USE_GEMINI env.' : 'AI service unavailable. Showing sample ideas.',
+          errorType: errType,
+          raw: err.raw ? (typeof err.raw === 'string' ? err.raw : JSON.stringify(err.raw).slice(0, 1000)) : undefined
+        });
+      }
+      // For other API errors, return 500 with details (and still include fallback as best-effort)
+      console.error('Unrecoverable API error (returning sample ideas as fallback):', err);
+      const sampleIdeas = generateSampleIdeas(interest, category, skillLevel);
+      return res.json({
+        success: true,
+        ideas: sampleIdeas,
+        count: sampleIdeas.length,
+        source: 'sample',
+        note: 'AI service returned unexpected error. Showing sample ideas.',
+        error: String(err.message || err)
+      });
+    }
+
+    // If we have text, parse it
+    console.log('Raw AI response (first 500 chars):', (text || '').substring(0, 500));
+    const sanitized = sanitizeModelText(text);
+    const arrStr = findBalancedJsonArray(sanitized);
+
+    if (!arrStr) {
+      console.error('Could not extract JSON array from AI response. Full text:', text);
+      throw new Error('AI response does not contain valid JSON array');
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(arrStr);
+      console.log('Successfully parsed JSON array from AI response, length:', parsed?.length);
+    } catch (parseError) {
+      console.error('Failed to parse JSON array:', parseError);
+      console.error('JSON string that failed:', arrStr);
+      throw new Error('Failed to parse AI response as JSON array');
+    }
+
+    if (!Array.isArray(parsed)) {
+      console.error('Parsed response is not an array:', typeof parsed, parsed);
+      throw new Error('AI response is not a valid array');
+    }
+
+    // Normalize and return ideas
+    const ideas = parsed.map((it, index) => ({
+      title: it.title || it.name || `Untitled Idea ${index + 1}`,
+      description: it.description || it.desc || '',
+      technologies: Array.isArray(it.technologies) 
+        ? it.technologies 
+        : (typeof it.technologies === 'string' 
+          ? it.technologies.split(',').map(s => s.trim()).filter(s => s)
+          : []),
+      difficulty: it.difficulty || it.level || skillLevel || 'Intermediate',
+      category: it.category || category || 'General'
+    }));
+
+    // Validate uniqueness
+    const titles = ideas.map(i => i.title.toLowerCase());
+    const uniqueTitles = new Set(titles);
+    if (titles.length !== uniqueTitles.size) {
+      console.warn('Some ideas have duplicate titles - API may have returned similar ideas');
+    }
+
+    console.log('Returning', ideas.length, 'unique ideas');
+    console.log('Idea titles:', ideas.map(i => i.title));
+
+    return res.json({
+      success: true,
+      ideas: ideas,
+      count: ideas.length,
+      source: 'ai',
+      timestamp: Date.now()
     });
 
-    const data = await aiResponse.json();
-    const ideas = data.choices[0].message.content;
-
-    res.json({ success: true, ideas });
-
   } catch (error) {
-    console.error('Error generating hackathon ideas:', error);
-    res.status(500).json({ success: false, message: 'Failed to generate ideas.' });
+    console.error('Error generating ideas:', error);
+
+    // fallback to samples if possible
+    try {
+      const { interest, category, skillLevel } = req.body;
+      if (interest) {
+        const sampleIdeas = generateSampleIdeas(interest, category, skillLevel);
+        return res.json({
+          success: true,
+          ideas: sampleIdeas,
+          count: sampleIdeas.length,
+          source: 'sample',
+          note: 'Error occurred. Showing sample ideas.',
+          error: String(error.message || error)
+        });
+      }
+    } catch (fallbackError) {
+      console.error('Fallback also failed:', fallbackError);
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate ideas. Please try again later.',
+      error: String(error.message || error)
+    });
   }
 };
 
@@ -228,44 +744,13 @@ const seedSampleHackathons = async () => {
 };
 
 // Sync hackathons from Devpost (web scraping approach)
-// Note: Devpost doesn't have a public API, so this would require web scraping
-// For now, this is a placeholder that can be extended with Puppeteer or Cheerio
 const syncFromDevpost = async (req, res) => {
   try {
-    // This is a placeholder - Devpost doesn't have a public API
-    // You would need to implement web scraping using Puppeteer or Cheerio
-    // For now, return a message
-    
     res.json({ 
       success: true, 
       message: 'Devpost sync not yet implemented. Please add hackathons manually or implement web scraping.',
       note: 'To implement: Use Puppeteer/Cheerio to scrape https://devpost.com/hackathons'
     });
-
-    // Example implementation (commented out):
-    /*
-    const puppeteer = require('puppeteer');
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    await page.goto('https://devpost.com/hackathons');
-    
-    const hackathons = await page.evaluate(() => {
-      // Scrape hackathon data from the page
-      // Return array of hackathon objects
-    });
-    
-    // Save to database
-    for (const hackathon of hackathons) {
-      await Hackathon.findOneAndUpdate(
-        { externalId: hackathon.devpostId },
-        hackathon,
-        { upsert: true, new: true }
-      );
-    }
-    
-    await browser.close();
-    */
-
   } catch (error) {
     console.error('Error syncing from Devpost:', error);
     res.status(500).json({ success: false, message: 'Failed to sync from Devpost.' });
@@ -273,7 +758,7 @@ const syncFromDevpost = async (req, res) => {
 };
 
 module.exports = {
-  generateIdeas,      // For generating project ideas (OpenAI ✅)
-  getHackathons,      // For fetching actual hackathon events (MongoDB ✅)
+  generateIdeas,      // For generating project ideas (AI or sample fallback)
+  getHackathons,      // For fetching actual hackathon events (MongoDB)
   syncFromDevpost     // For syncing hackathons from Devpost (placeholder)
 };
