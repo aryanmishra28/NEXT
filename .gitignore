@@ -1,0 +1,36 @@
+# Node & general build artifacts
+node_modules/
+dist/
+build/
+.cache/
+.temp/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backend environment/secrets
+Backend/.env
+Backend/.env.local
+Backend/.env.*
+
+# Frontend environment
+Frontend/.env
+Frontend/.env.local
+Frontend/.env.*.local
+
+# Frontend build outputs
+Frontend/dist/
+Frontend/node_modules/
+
+# Logs
+logs/
+*.log
+*.tmp.env
+node_modules/
