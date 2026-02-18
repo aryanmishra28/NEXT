@@ -38,7 +38,7 @@ export function HackathonIdeas() {
   const [featuredHackathons, setFeaturedHackathons] = useState<Hackathon[]>([]);
   const [isLoadingHackathons, setIsLoadingHackathons] = useState(true);
   const [hackathonsError, setHackathonsError] = useState<string | null>(null);
-  
+
   // Hackathon posting state
   const [showPostForm, setShowPostForm] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
@@ -149,30 +149,30 @@ export function HackathonIdeas() {
           skillLevel: 'Intermediate'
         }),
       });
-  
+
       if (!res.ok) {
         const text = await res.text();
         console.error('Server error:', res.status, text);
         alert('Failed to generate ideas. Check server logs.');
         return;
       }
-  
+
       const data = await res.json();
-  
+
       // Case A: Backend returned structured array at data.ideas
       if (Array.isArray(data.ideas)) {
         // Normalize each idea to our GeneratedIdea shape
         const normalized = data.ideas.map((it: any) => ({
           title: it.title || it.name || 'Untitled Idea',
           description: it.description || it.desc || '',
-          technologies: Array.isArray(it.technologies) ? it.technologies : (typeof it.technologies === 'string' ? it.technologies.split(',').map((s:string)=>s.trim()) : []),
+          technologies: Array.isArray(it.technologies) ? it.technologies : (typeof it.technologies === 'string' ? it.technologies.split(',').map((s: string) => s.trim()) : []),
           difficulty: it.difficulty || it.level || 'Intermediate',
           category: it.category || 'General'
         }));
         setGeneratedIdeas(normalized);
         return;
       }
-  
+
       // Case B: Backend returned ideas_raw (string). Try to extract JSON substring and parse.
       const raw = data.ideas_raw ?? data.ideas ?? JSON.stringify(data);
       const extracted = extractJsonArray(raw);
@@ -183,7 +183,7 @@ export function HackathonIdeas() {
             const normalized = parsed.map((it: any) => ({
               title: it.title || it.name || 'Untitled Idea',
               description: it.description || it.desc || '',
-              technologies: Array.isArray(it.technologies) ? it.technologies : (typeof it.technologies === 'string' ? it.technologies.split(',').map((s:string)=>s.trim()) : []),
+              technologies: Array.isArray(it.technologies) ? it.technologies : (typeof it.technologies === 'string' ? it.technologies.split(',').map((s: string) => s.trim()) : []),
               difficulty: it.difficulty || it.level || 'Intermediate',
               category: it.category || 'General'
             }));
@@ -194,7 +194,7 @@ export function HackathonIdeas() {
           console.warn('JSON parse failed on extracted substring', e);
         }
       }
-  
+
       // Final fallback: show raw text as a single card
       setGeneratedIdeas([{
         title: 'AI Output (raw)',
@@ -203,7 +203,7 @@ export function HackathonIdeas() {
         difficulty: 'Intermediate',
         category: 'AI'
       }]);
-  
+
     } catch (err) {
       console.error('Network / unexpected error:', err);
       alert('Network error while generating ideas.');
@@ -211,7 +211,7 @@ export function HackathonIdeas() {
       setIsGenerating(false);
     }
   };
-  
+
   // Helper: find first JSON array in text and return it as string (or null)
   function extractJsonArray(text: string): string | null {
     if (!text || typeof text !== 'string') return null;
@@ -221,7 +221,7 @@ export function HackathonIdeas() {
     // Return the substring that looks like a JSON array
     return text.slice(first, last + 1);
   }
-  
+
 
   const getDifficultyColor = (difficulty: string | undefined) => {
     if (!difficulty) return 'bg-gray-100 text-gray-800';
@@ -242,19 +242,18 @@ export function HackathonIdeas() {
       await postHackathon({
         title: postForm.title,
         description: postForm.description,
-        prizeMoney: postForm.prizeMoney,
-        startDate: postForm.startDate,
-        endDate: postForm.endDate,
-        registrationDeadline: postForm.registrationDeadline,
+        registrationLink: postForm.website,
+        deadline: postForm.registrationDeadline,
+        prize: postForm.prizeMoney,
+        prizeAmount: parseInt(postForm.prizeMoney.replace(/[^0-9]/g, '')) || 0,
         categories: postForm.categories.split(',').map(cat => cat.trim()),
         difficulty: postForm.difficulty,
         tags: postForm.tags.split(',').map(tag => tag.trim()),
         location: postForm.location,
         requirements: postForm.requirements.split(',').map(req => req.trim()),
-        website: postForm.website,
-        contact: postForm.contact
+        organizer: postForm.contact,
       });
-      
+
       alert('Hackathon posted successfully!');
       setShowPostForm(false);
       setPostForm({
@@ -272,7 +271,7 @@ export function HackathonIdeas() {
         website: '',
         contact: ''
       });
-      
+
       // Refresh the hackathons list
       setIsLoadingHackathons(true);
       try {
@@ -320,7 +319,7 @@ export function HackathonIdeas() {
   const handleFetchThirdPartyHackathons = async () => {
     setIsLoadingHackathons(true);
     setHackathonsError(null);
-    
+
     try {
       const response = await fetchThirdPartyHackathons();
       if (response.success && response.hackathons) {
@@ -344,7 +343,7 @@ export function HackathonIdeas() {
   const handleSyncThirdPartyHackathons = async () => {
     setIsLoadingHackathons(true);
     setHackathonsError(null);
-    
+
     try {
       const response = await syncHackathonsFromThirdParty();
       if (response.success) {
@@ -406,11 +405,10 @@ export function HackathonIdeas() {
                     <button
                       key={skill}
                       onClick={() => setSelectedSkill(skill)}
-                      className={`p-3 rounded-xl border-2 transition-all duration-200 ${
-                        selectedSkill === skill
+                      className={`p-3 rounded-xl border-2 transition-all duration-200 ${selectedSkill === skill
                           ? 'border-[#6A0DAD] bg-[#6A0DAD]/5 text-[#6A0DAD]'
                           : 'border-gray-200 hover:border-gray-300 text-gray-700'
-                      }`}
+                        }`}
                     >
                       {skill}
                     </button>
@@ -505,18 +503,18 @@ export function HackathonIdeas() {
                         type="text"
                         required
                         value={postForm.title}
-                        onChange={(e) => setPostForm({...postForm, title: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, title: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                         placeholder="Enter hackathon title"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Prize Money</label>
                       <input
                         type="text"
                         value={postForm.prizeMoney}
-                        onChange={(e) => setPostForm({...postForm, prizeMoney: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, prizeMoney: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                         placeholder="e.g., $10,000"
                       />
@@ -529,7 +527,7 @@ export function HackathonIdeas() {
                       required
                       rows={4}
                       value={postForm.description}
-                      onChange={(e) => setPostForm({...postForm, description: e.target.value})}
+                      onChange={(e) => setPostForm({ ...postForm, description: e.target.value })}
                       className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                       placeholder="Describe your hackathon..."
                     />
@@ -542,28 +540,28 @@ export function HackathonIdeas() {
                         type="datetime-local"
                         required
                         value={postForm.startDate}
-                        onChange={(e) => setPostForm({...postForm, startDate: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, startDate: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">End Date *</label>
                       <input
                         type="datetime-local"
                         required
                         value={postForm.endDate}
-                        onChange={(e) => setPostForm({...postForm, endDate: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, endDate: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Registration Deadline</label>
                       <input
                         type="datetime-local"
                         value={postForm.registrationDeadline}
-                        onChange={(e) => setPostForm({...postForm, registrationDeadline: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, registrationDeadline: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                       />
                     </div>
@@ -575,17 +573,17 @@ export function HackathonIdeas() {
                       <input
                         type="text"
                         value={postForm.location}
-                        onChange={(e) => setPostForm({...postForm, location: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, location: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                         placeholder="Online, City Name, etc."
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Difficulty</label>
                       <select
                         value={postForm.difficulty}
-                        onChange={(e) => setPostForm({...postForm, difficulty: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, difficulty: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                       >
                         <option value="Beginner">Beginner</option>
@@ -602,18 +600,18 @@ export function HackathonIdeas() {
                       <input
                         type="text"
                         value={postForm.categories}
-                        onChange={(e) => setPostForm({...postForm, categories: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, categories: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                         placeholder="Web Development, AI/ML, Mobile"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Tags (comma-separated)</label>
                       <input
                         type="text"
                         value={postForm.tags}
-                        onChange={(e) => setPostForm({...postForm, tags: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, tags: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                         placeholder="JavaScript, React, Node.js"
                       />
@@ -625,7 +623,7 @@ export function HackathonIdeas() {
                     <input
                       type="text"
                       value={postForm.requirements}
-                      onChange={(e) => setPostForm({...postForm, requirements: e.target.value})}
+                      onChange={(e) => setPostForm({ ...postForm, requirements: e.target.value })}
                       className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                       placeholder="Student ID, Portfolio, Team of 3-5"
                     />
@@ -637,18 +635,18 @@ export function HackathonIdeas() {
                       <input
                         type="url"
                         value={postForm.website}
-                        onChange={(e) => setPostForm({...postForm, website: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, website: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                         placeholder="https://hackathon-website.com"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Contact Email</label>
                       <input
                         type="email"
                         value={postForm.contact}
-                        onChange={(e) => setPostForm({...postForm, contact: e.target.value})}
+                        onChange={(e) => setPostForm({ ...postForm, contact: e.target.value })}
                         className="w-full p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6A0DAD] focus:border-transparent"
                         placeholder="contact@hackathon.com"
                       />
@@ -673,7 +671,7 @@ export function HackathonIdeas() {
                         </>
                       )}
                     </button>
-                    
+
                     <button
                       type="button"
                       onClick={() => {
@@ -746,7 +744,7 @@ export function HackathonIdeas() {
           </div>
 
           {isLoadingHackathons ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {[1, 2, 3].map((i) => (
                 <div key={i} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden animate-pulse">
                   <div className="h-32 bg-gray-200"></div>
@@ -800,39 +798,39 @@ export function HackathonIdeas() {
               {featuredHackathons.map((hackathon) => (
                 <div key={hackathon.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow duration-200">
                   <div className={`h-32 ${hackathon.image || 'bg-gradient-to-br from-[#6A0DAD] to-[#9B4DFF]'} flex items-center justify-center`}>
-                  <div className="text-center text-white">
-                    <Trophy size={32} className="mx-auto mb-2" />
+                    <div className="text-center text-white">
+                      <Trophy size={32} className="mx-auto mb-2" />
                       <p className="font-bold text-lg">{hackathon.prize || 'TBA'}</p>
+                    </div>
                   </div>
-                </div>
 
-                <div className="p-6">
-                  <div className="flex items-start justify-between mb-3">
-                    <h3 className="font-semibold text-gray-900 leading-tight">{hackathon.title}</h3>
+                  <div className="p-6">
+                    <div className="flex items-start justify-between mb-3">
+                      <h3 className="font-semibold text-gray-900 leading-tight">{hackathon.title}</h3>
                       {hackathon.difficulty && (
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getDifficultyColor(hackathon.difficulty)}`}>
-                      {hackathon.difficulty}
-                    </span>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getDifficultyColor(hackathon.difficulty)}`}>
+                          {hackathon.difficulty}
+                        </span>
                       )}
-                  </div>
+                    </div>
 
                     {hackathon.description && (
                       <p className="text-sm text-gray-600 mb-3 line-clamp-2">{hackathon.description}</p>
                     )}
 
-                  <div className="space-y-2 mb-4">
-                    <div className="flex items-center text-gray-600 text-sm">
+                    <div className="space-y-2 mb-4">
+                      <div className="flex items-center text-gray-600 text-sm">
                         <Calendar size={14} className="mr-2 flex-shrink-0" />
                         <span>{hackathon.date}</span>
-                    </div>
-                    <div className="flex items-center text-gray-600 text-sm">
+                      </div>
+                      <div className="flex items-center text-gray-600 text-sm">
                         <MapPin size={14} className="mr-2 flex-shrink-0" />
                         <span>{hackathon.location}</span>
                         {hackathon.isVirtual && (
                           <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs">Virtual</span>
                         )}
-                    </div>
-                    <div className="flex items-center text-gray-600 text-sm">
+                      </div>
+                      <div className="flex items-center text-gray-600 text-sm">
                         <Users size={14} className="mr-2 flex-shrink-0" />
                         <span>{hackathon.participants} participants</span>
                       </div>
@@ -840,18 +838,18 @@ export function HackathonIdeas() {
                         <div className="flex items-center text-gray-600 text-sm">
                           <Clock size={14} className="mr-2 flex-shrink-0" />
                           <span>Deadline: {hackathon.deadline}</span>
-                    </div>
+                        </div>
                       )}
-                  </div>
+                    </div>
 
                     {hackathon.tags && hackathon.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-4">
+                      <div className="flex flex-wrap gap-2 mb-4">
                         {hackathon.tags.slice(0, 3).map((tag, tagIndex) => (
-                      <span key={tagIndex} className="px-2 py-1 bg-[#6A0DAD]/10 text-[#6A0DAD] rounded-lg text-xs">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
+                          <span key={tagIndex} className="px-2 py-1 bg-[#6A0DAD]/10 text-[#6A0DAD] rounded-lg text-xs">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
                     )}
 
                     <a
@@ -860,13 +858,13 @@ export function HackathonIdeas() {
                       rel="noopener noreferrer"
                       className="w-full bg-gradient-to-r from-[#6A0DAD] to-[#9B4DFF] text-white py-3 rounded-xl font-medium hover:shadow-lg transition-all duration-200 flex items-center justify-center space-x-2"
                     >
-                    <span>Register Now</span>
-                    <ExternalLink size={16} />
+                      <span>Register Now</span>
+                      <ExternalLink size={16} />
                     </a>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
           )}
         </section>
 
